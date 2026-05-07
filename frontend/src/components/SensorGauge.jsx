@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 
 /**
- * Industrial dial gauge with SYNCED needle + fill arc (both sweep left→right as value grows).
+ * Industrial gauge using POLYLINE arc (predictable, no SVG arc weirdness).
+ * - 0% → needle at 7 o'clock (left-bottom)
+ * - 50% → needle at 12 o'clock (top)
+ * - 100% → needle at 5 o'clock (right-bottom)
+ * - Arc fills from 7 o'clock THROUGH THE TOP to current position.
  */
 export default function SensorGauge({
   value = 0, min = 0, max = 100, unit = "", label = "",
@@ -15,17 +19,37 @@ export default function SensorGauge({
   };
   const c = colors[status] || colors.info;
 
-  // Geometry — gauge sweeps from 7 o'clock (left-bottom) over the TOP to 5 o'clock (right-bottom)
-  const radius = 70, cx = 90, cy = 90;
-  const START_ANGLE = -210;  // 7 o'clock in SVG; using negative so +240° goes OVER THE TOP
-  const END_ANGLE = 30;      // 5 o'clock in SVG (= START_ANGLE + 240)
-  const TOTAL_SWEEP = 240;
+  const cx = 90, cy = 90, r = 70;
 
-  // Current angle sweeps from START → END as pct: 0 → 1 (visually left → top → right)
-  const currentAngle = START_ANGLE + pct * TOTAL_SWEEP;   // -210 → -90 (top) → 30
-  const needleAngleRad = currentAngle * Math.PI / 180;
-  const needleX = cx + radius * 0.82 * Math.cos(needleAngleRad);
-  const needleY = cy + radius * 0.82 * Math.sin(needleAngleRad);
+  // Map pct (0..1) to angle in DEGREES on screen.
+  // We use a custom angle convention: 0° = 12 o'clock (top), positive = clockwise.
+  // 0% → -120° (7 o'clock, top-left rotated 120° CCW from top)
+  // 50% → 0° (top)
+  // 100% → 120° (5 o'clock, top-right rotated 120° CW from top)
+  const SPAN = 240; // total degrees swept
+  const angleAtPct = (p) => -120 + p * SPAN;
+
+  // Convert "screen angle" (0=top, +CW) to SVG (x, y) on circle of radius rr around (cx, cy)
+  const point = (angleDeg, rr = r) => {
+    const rad = (angleDeg - 90) * Math.PI / 180;
+    return { x: cx + rr * Math.cos(rad), y: cy + rr * Math.sin(rad) };
+  };
+
+  const needle = point(angleAtPct(pct), r * 0.82);
+
+  // Build polyline path with many segments (smooth arc)
+  const buildPath = (fromPct, toPct, segments = 100) => {
+    const pts = [];
+    for (let i = 0; i <= segments; i++) {
+      const p = fromPct + (toPct - fromPct) * (i / segments);
+      const pt = point(angleAtPct(p), r);
+      pts.push(`${i === 0 ? "M" : "L"}${pt.x.toFixed(2)},${pt.y.toFixed(2)}`);
+    }
+    return pts.join(" ");
+  };
+
+  const trackPath = buildPath(0, 1);
+  const fillPath = pct > 0.001 ? buildPath(0, pct) : "";
 
   // Animated counter
   const [display, setDisplay] = useState(v);
@@ -47,6 +71,14 @@ export default function SensorGauge({
     return () => cancelAnimationFrame(raf);
   }, [v]);
 
+  // Tick marks
+  const ticks = Array.from({ length: 9 }, (_, i) => {
+    const tickPct = i / 8;
+    const inner = point(angleAtPct(tickPct), r + 4);
+    const outer = point(angleAtPct(tickPct), r + 10);
+    return { ...inner, x2: outer.x, y2: outer.y, key: i };
+  });
+
   // Sparkline
   const spark = history.slice(-24);
   const sMin = spark.length ? Math.min(...spark, v) : v;
@@ -65,7 +97,7 @@ export default function SensorGauge({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           {Icon && <Icon size={12} className="text-neutral-500" />}
-          <div className="overline no-underline">{label}</div>
+          <div className="overline">{label}</div>
         </div>
         <div className="flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full blink-dot" style={{ background: c }} />
@@ -80,31 +112,21 @@ export default function SensorGauge({
              style={{ background: `radial-gradient(ellipse at center, ${c}, transparent 60%)` }} />
         <svg width="180" height="120" viewBox="0 0 180 120" className="relative z-10">
           {/* Tick marks */}
-          {Array.from({ length: 9 }).map((_, i) => {
-            const a = (START_ANGLE + (i * TOTAL_SWEEP) / 8) * Math.PI / 180;
-            const r1 = radius + 4, r2 = radius + 10;
-            return (
-              <line key={i}
-                x1={cx + r1 * Math.cos(a)} y1={cy + r1 * Math.sin(a)}
-                x2={cx + r2 * Math.cos(a)} y2={cy + r2 * Math.sin(a)}
-                stroke="#2a2a2c" strokeWidth="1.2" />
-            );
-          })}
+          {ticks.map((t) => (
+            <line key={t.key} x1={t.x} y1={t.y} x2={t.x2} y2={t.y2} stroke="#2a2a2c" strokeWidth="1.2" />
+          ))}
 
-          {/* Background track (full arc) */}
-          <path d={buildArc(cx, cy, radius, START_ANGLE, END_ANGLE)}
-            fill="none" stroke="#1C1C1E" strokeWidth="10" strokeLinecap="round" />
+          {/* Background track */}
+          <path d={trackPath} fill="none" stroke="#1C1C1E" strokeWidth="10" strokeLinecap="round" />
 
-          {/* Filled arc: from START to current angle (always starts on LEFT, grows to RIGHT) */}
-          {pct > 0.001 && (
-            <path d={buildArc(cx, cy, radius, START_ANGLE, currentAngle)}
-              fill="none" stroke={c} strokeWidth="10" strokeLinecap="round"
-              style={{ transition: "d 600ms cubic-bezier(0.4,0,0.2,1), stroke 300ms",
-                       filter: `drop-shadow(0 0 6px ${c}80)` }} />
+          {/* Filled arc */}
+          {fillPath && (
+            <path d={fillPath} fill="none" stroke={c} strokeWidth="10" strokeLinecap="round"
+              style={{ transition: "stroke 300ms", filter: `drop-shadow(0 0 6px ${c}80)` }} />
           )}
 
           {/* Needle */}
-          <line x1={cx} y1={cy} x2={needleX} y2={needleY}
+          <line x1={cx} y1={cy} x2={needle.x} y2={needle.y}
             stroke={c} strokeWidth="2.5" strokeLinecap="round"
             style={{ transition: "x2 600ms cubic-bezier(0.4,0,0.2,1), y2 600ms cubic-bezier(0.4,0,0.2,1)",
                      filter: `drop-shadow(0 0 4px ${c})` }} />
@@ -114,7 +136,7 @@ export default function SensorGauge({
       </div>
 
       <div className="text-center -mt-1">
-        <div className="font-mono tabular text-[2.5rem] leading-none font-bold text-neutral-50 no-underline"
+        <div className="font-mono tabular text-[2.5rem] leading-none font-bold text-neutral-50"
              style={{ textShadow: `0 0 24px ${c}40`, textDecoration: "none" }}>
           {display.toFixed(decimals)}
         </div>
@@ -143,23 +165,4 @@ export default function SensorGauge({
       )}
     </div>
   );
-}
-
-/**
- * Builds an SVG arc path from `fromDeg` to `toDeg` (degrees in SVG coord space).
- * The arc is always drawn going counter-clockwise in math terms (decreasing angle),
- * so it visually goes left→right over the top. `fromDeg` must be >= `toDeg`.
- */
-function buildArc(cx, cy, r, fromDeg, toDeg) {
-  const start = polarToCartesian(cx, cy, r, fromDeg);
-  const end = polarToCartesian(cx, cy, r, toDeg);
-  const diff = Math.abs(fromDeg - toDeg);
-  const largeArcFlag = diff > 180 ? "1" : "0";
-  // sweep-flag = 0 → negative angle direction (counter-clockwise in SVG y-down = visually left→right over top)
-  return ["M", start.x, start.y, "A", r, r, 0, largeArcFlag, 0, end.x, end.y].join(" ");
-}
-
-function polarToCartesian(cx, cy, r, angleDeg) {
-  const a = angleDeg * Math.PI / 180.0;
-  return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
 }
