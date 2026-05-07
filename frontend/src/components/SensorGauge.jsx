@@ -15,15 +15,14 @@ export default function SensorGauge({
   };
   const c = colors[status] || colors.info;
 
-  // Geometry
+  // Geometry — gauge sweeps from 7 o'clock (left-bottom) over the TOP to 5 o'clock (right-bottom)
   const radius = 70, cx = 90, cy = 90;
-  const START_ANGLE = 150;   // 7 o'clock in SVG (bottom-left)
-  const END_ANGLE = 30;      // 5 o'clock in SVG (bottom-right)
-  const TOTAL_SWEEP = 240;   // goes over the top
+  const START_ANGLE = -210;  // 7 o'clock in SVG; using negative so +240° goes OVER THE TOP
+  const END_ANGLE = 30;      // 5 o'clock in SVG (= START_ANGLE + 240)
+  const TOTAL_SWEEP = 240;
 
-  // Current angle for needle & arc end point — both sweep from START to END as pct grows
-  // SVG y-axis is flipped, so we traverse CCW in math terms (decreasing angle)
-  const currentAngle = START_ANGLE - pct * TOTAL_SWEEP;   // 150 → -90 → 30
+  // Current angle sweeps from START → END as pct: 0 → 1 (visually left → top → right)
+  const currentAngle = START_ANGLE + pct * TOTAL_SWEEP;   // -210 → -90 (top) → 30
   const needleAngleRad = currentAngle * Math.PI / 180;
   const needleX = cx + radius * 0.82 * Math.cos(needleAngleRad);
   const needleY = cy + radius * 0.82 * Math.sin(needleAngleRad);
@@ -82,7 +81,7 @@ export default function SensorGauge({
         <svg width="180" height="120" viewBox="0 0 180 120" className="relative z-10">
           {/* Tick marks */}
           {Array.from({ length: 9 }).map((_, i) => {
-            const a = (START_ANGLE - (i * TOTAL_SWEEP) / 8) * Math.PI / 180;
+            const a = (START_ANGLE + (i * TOTAL_SWEEP) / 8) * Math.PI / 180;
             const r1 = radius + 4, r2 = radius + 10;
             return (
               <line key={i}
