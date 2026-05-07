@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
 /**
- * Enhanced industrial dial gauge with animated value counter + live sparkline.
+ * Industrial dial gauge with SYNCED needle + fill arc (both sweep left→right as value grows).
  */
 export default function SensorGauge({
   value = 0, min = 0, max = 100, unit = "", label = "",
@@ -9,17 +9,24 @@ export default function SensorGauge({
 }) {
   const v = Math.max(min, Math.min(max, value));
   const pct = (v - min) / (max - min);
-  const angle = -120 + pct * 240;
   const colors = {
     success: "#10B981", warning: "#F59E0B",
     danger: "#EF4444", info: "#06B6D4",
   };
   const c = colors[status] || colors.info;
 
+  // Geometry
   const radius = 70, cx = 90, cy = 90;
-  const startAngle = -210, endAngle = 30;
-  const arcLen = (endAngle - startAngle) * (Math.PI / 180) * radius;
-  const filled = pct * arcLen;
+  const START_ANGLE = 150;   // 7 o'clock in SVG (bottom-left)
+  const END_ANGLE = 30;      // 5 o'clock in SVG (bottom-right)
+  const TOTAL_SWEEP = 240;   // goes over the top
+
+  // Current angle for needle & arc end point — both sweep from START to END as pct grows
+  // SVG y-axis is flipped, so we traverse CCW in math terms (decreasing angle)
+  const currentAngle = START_ANGLE - pct * TOTAL_SWEEP;   // 150 → -90 → 30
+  const needleAngleRad = currentAngle * Math.PI / 180;
+  const needleX = cx + radius * 0.82 * Math.cos(needleAngleRad);
+  const needleY = cy + radius * 0.82 * Math.sin(needleAngleRad);
 
   // Animated counter
   const [display, setDisplay] = useState(v);
@@ -43,8 +50,8 @@ export default function SensorGauge({
 
   // Sparkline
   const spark = history.slice(-24);
-  const sMin = Math.min(...spark, v);
-  const sMax = Math.max(...spark, v);
+  const sMin = spark.length ? Math.min(...spark, v) : v;
+  const sMax = spark.length ? Math.max(...spark, v) : v + 1;
   const sRange = sMax - sMin || 1;
   const sparkPath = spark.map((val, i) => {
     const x = (i / Math.max(1, spark.length - 1)) * 100;
@@ -59,7 +66,7 @@ export default function SensorGauge({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           {Icon && <Icon size={12} className="text-neutral-500" />}
-          <div className="overline">{label}</div>
+          <div className="overline no-underline">{label}</div>
         </div>
         <div className="flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full blink-dot" style={{ background: c }} />
@@ -70,13 +77,12 @@ export default function SensorGauge({
       </div>
 
       <div className="relative flex items-center justify-center">
-        {/* Outer glow halo */}
         <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-24 rounded-full blur-2xl opacity-20"
              style={{ background: `radial-gradient(ellipse at center, ${c}, transparent 60%)` }} />
         <svg width="180" height="120" viewBox="0 0 180 120" className="relative z-10">
           {/* Tick marks */}
           {Array.from({ length: 9 }).map((_, i) => {
-            const a = (-210 + (i * 240) / 8) * Math.PI / 180;
+            const a = (START_ANGLE - (i * TOTAL_SWEEP) / 8) * Math.PI / 180;
             const r1 = radius + 4, r2 = radius + 10;
             return (
               <line key={i}
@@ -85,28 +91,32 @@ export default function SensorGauge({
                 stroke="#2a2a2c" strokeWidth="1.2" />
             );
           })}
-          {/* Track */}
-          <path d={describeArc(cx, cy, radius, startAngle, endAngle)}
+
+          {/* Background track (full arc) */}
+          <path d={buildArc(cx, cy, radius, START_ANGLE, END_ANGLE)}
             fill="none" stroke="#1C1C1E" strokeWidth="10" strokeLinecap="round" />
-          {/* Value arc */}
-          <path d={describeArc(cx, cy, radius, startAngle, endAngle)}
-            fill="none" stroke={c} strokeWidth="10" strokeLinecap="round"
-            strokeDasharray={`${filled} ${arcLen}`}
-            style={{ transition: "stroke-dasharray 600ms cubic-bezier(0.4,0,0.2,1), stroke 300ms", filter: `drop-shadow(0 0 6px ${c}80)` }} />
+
+          {/* Filled arc: from START to current angle (always starts on LEFT, grows to RIGHT) */}
+          {pct > 0.001 && (
+            <path d={buildArc(cx, cy, radius, START_ANGLE, currentAngle)}
+              fill="none" stroke={c} strokeWidth="10" strokeLinecap="round"
+              style={{ transition: "d 600ms cubic-bezier(0.4,0,0.2,1), stroke 300ms",
+                       filter: `drop-shadow(0 0 6px ${c}80)` }} />
+          )}
+
           {/* Needle */}
-          <line x1={cx} y1={cy}
-            x2={cx + radius * 0.82 * Math.cos((angle - 90) * Math.PI / 180)}
-            y2={cy + radius * 0.82 * Math.sin((angle - 90) * Math.PI / 180)}
+          <line x1={cx} y1={cy} x2={needleX} y2={needleY}
             stroke={c} strokeWidth="2.5" strokeLinecap="round"
-            style={{ transition: "all 600ms cubic-bezier(0.4,0,0.2,1)", filter: `drop-shadow(0 0 4px ${c})` }} />
+            style={{ transition: "x2 600ms cubic-bezier(0.4,0,0.2,1), y2 600ms cubic-bezier(0.4,0,0.2,1)",
+                     filter: `drop-shadow(0 0 4px ${c})` }} />
           <circle cx={cx} cy={cy} r="7" fill="#060607" stroke={c} strokeWidth="2" />
           <circle cx={cx} cy={cy} r="2.5" fill={c} />
         </svg>
       </div>
 
       <div className="text-center -mt-1">
-        <div className="font-mono tabular text-[2.5rem] leading-none font-bold text-neutral-50"
-             style={{ textShadow: `0 0 24px ${c}40` }}>
+        <div className="font-mono tabular text-[2.5rem] leading-none font-bold text-neutral-50 no-underline"
+             style={{ textShadow: `0 0 24px ${c}40`, textDecoration: "none" }}>
           {display.toFixed(decimals)}
         </div>
         <div className="text-[10px] text-neutral-500 mt-2 uppercase tracking-[0.25em] font-medium">{unit}</div>
@@ -136,13 +146,21 @@ export default function SensorGauge({
   );
 }
 
+/**
+ * Builds an SVG arc path from `fromDeg` to `toDeg` (degrees in SVG coord space).
+ * The arc is always drawn going counter-clockwise in math terms (decreasing angle),
+ * so it visually goes left→right over the top. `fromDeg` must be >= `toDeg`.
+ */
+function buildArc(cx, cy, r, fromDeg, toDeg) {
+  const start = polarToCartesian(cx, cy, r, fromDeg);
+  const end = polarToCartesian(cx, cy, r, toDeg);
+  const diff = Math.abs(fromDeg - toDeg);
+  const largeArcFlag = diff > 180 ? "1" : "0";
+  // sweep-flag = 0 → negative angle direction (counter-clockwise in SVG y-down = visually left→right over top)
+  return ["M", start.x, start.y, "A", r, r, 0, largeArcFlag, 0, end.x, end.y].join(" ");
+}
+
 function polarToCartesian(cx, cy, r, angleDeg) {
   const a = angleDeg * Math.PI / 180.0;
   return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
-}
-function describeArc(cx, cy, r, startAngle, endAngle) {
-  const start = polarToCartesian(cx, cy, r, endAngle);
-  const end = polarToCartesian(cx, cy, r, startAngle);
-  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-  return ["M", start.x, start.y, "A", r, r, 0, largeArcFlag, 0, end.x, end.y].join(" ");
 }

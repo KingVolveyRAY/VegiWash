@@ -29,6 +29,14 @@
 
 * { @apply border-border; }
 
+/* Kill any rogue underline from browser defaults / visual-edit wrappers */
+h1, h2, h3, h4, h5, h6, p, span, div, li, a {
+    text-decoration: none;
+}
+.overline, .font-display, .font-mono {
+    text-decoration: none !important;
+}
+
 html, body {
     background: #060607;
     color: #F5F5F5;
