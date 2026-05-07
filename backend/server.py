@@ -217,7 +217,11 @@ async def ingest_sensor(payload: SensorIngest, user=Depends(get_current_user)):
                 {"user_id": user["id"]},
                 {"$set": {"motor_speed": 0, "nozzle_on": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
             )
-            await _send_push_to_user(user["id"], "Auto Stop", f"Turbidity {payload.turbidity:.1f} NTU melebihi threshold. Mesin dihentikan.")
+            await _notify_with_cooldown(
+                user["id"], "auto_stop", "Auto Stop Aktif",
+                f"Turbidity {payload.turbidity:.1f} NTU melebihi threshold. Mesin dihentikan.",
+                icon="🚨", cooldown_sec=60,
+            )
     return {"ok": True, "id": reading.id}
 
 @api_router.get("/sensors/latest")
@@ -257,6 +261,9 @@ async def update_control(payload: ControlUpdate, user=Depends(get_current_user))
 async def start_session(user=Depends(get_current_user)):
     session = WashSession(user_id=user["id"])
     await db.sessions.insert_one(session.model_dump(mode="json"))
+    await _send_push_to_user(user["id"], "Sesi Dimulai",
+                              "Pencucian sayuran dimulai. Monitor pH & turbidity di dashboard.",
+                              icon="▶️")
     return session.model_dump(mode="json")
 
 @api_router.post("/sessions/{session_id}/stop")
@@ -283,7 +290,12 @@ async def stop_session(session_id: str, user=Depends(get_current_user)):
     await db.sessions.update_one({"id": session_id}, {"$set": update})
     ph_str = f"{avg_ph:.2f}" if avg_ph is not None else "N/A"
     tu_str = f"{avg_tu:.1f}" if avg_tu is not None else "N/A"
-    await _send_push_to_user(user["id"], "Pencucian Selesai", f"Sesi selesai. pH avg: {ph_str}, Turbidity avg: {tu_str} NTU")
+    duration = int((datetime.now(timezone.utc) - started_at).total_seconds())
+    await _send_push_to_user(
+        user["id"], "Pencucian Selesai",
+        f"Durasi {duration}s · pH avg: {ph_str} · Turbidity avg: {tu_str} NTU",
+        icon="✅",
+    )
     doc = await db.sessions.find_one({"id": session_id}, {"_id": 0})
     return doc
 
@@ -363,6 +375,21 @@ async def analyze_vegetable(payload: AnalyzeImageRequest, user=Depends(get_curre
         "recommendations": result.recommendations,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
+
+    # Notify based on AI score
+    if result.cleanliness_score >= 85:
+        await _send_push_to_user(
+            user["id"], "Sayuran Bersih!",
+            f"Skor kebersihan: {result.cleanliness_score}/100. {result.description[:80]}",
+            icon="✨",
+        )
+    elif result.cleanliness_score < 60:
+        await _send_push_to_user(
+            user["id"], "Perlu Cuci Ulang",
+            f"Skor kebersihan rendah: {result.cleanliness_score}/100. {result.description[:80]}",
+            icon="⚠️",
+        )
+
     return result
 
 # ============= Web Push =============
@@ -389,7 +416,7 @@ async def test_push(user=Depends(get_current_user)):
     sent = await _send_push_to_user(user["id"], "AgriFlow Test", "Notifikasi push berfungsi! 🥬")
     return {"sent": sent}
 
-async def _send_push_to_user(user_id: str, title: str, body: str) -> int:
+async def _send_push_to_user(user_id: str, title: str, body: str, icon: str = "🔔") -> int:
     if not VAPID_PRIVATE_KEY:
         return 0
     cursor = db.push_subs.find({"user_id": user_id}, {"_id": 0})
@@ -399,7 +426,7 @@ async def _send_push_to_user(user_id: str, title: str, body: str) -> int:
         try:
             webpush(
                 subscription_info={"endpoint": s["endpoint"], "keys": s["keys"]},
-                data=json.dumps({"title": title, "body": body}),
+                data=json.dumps({"title": f"{icon} {title}", "body": body}),
                 vapid_private_key=VAPID_PRIVATE_KEY,
                 vapid_claims={"sub": f"mailto:{VAPID_CLAIM_EMAIL}"},
             )
@@ -409,6 +436,26 @@ async def _send_push_to_user(user_id: str, title: str, body: str) -> int:
             if ex.response and ex.response.status_code in (404, 410):
                 await db.push_subs.delete_one({"endpoint": s["endpoint"]})
     return sent
+
+async def _notify_with_cooldown(user_id: str, alert_type: str, title: str, body: str,
+                                 icon: str = "🔔", cooldown_sec: int = 120) -> bool:
+    """Send notification only if same alert_type wasn't fired within cooldown_sec."""
+    now = datetime.now(timezone.utc)
+    last = await db.notif_cooldowns.find_one(
+        {"user_id": user_id, "alert_type": alert_type}, {"_id": 0}
+    )
+    if last:
+        last_time = datetime.fromisoformat(last["last_sent"])
+        if (now - last_time).total_seconds() < cooldown_sec:
+            return False
+    await db.notif_cooldowns.update_one(
+        {"user_id": user_id, "alert_type": alert_type},
+        {"$set": {"user_id": user_id, "alert_type": alert_type, "last_sent": now.isoformat()}},
+        upsert=True,
+    )
+    sent = await _send_push_to_user(user_id, title, body, icon)
+    logging.info(f"[NOTIF] user={user_id[:8]} type={alert_type} sent={sent}")
+    return sent > 0
 
 # ============= Simulator =============
 _simulator_task = None
@@ -440,16 +487,45 @@ async def _sensor_simulator():
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 await db.sensor_readings.insert_one(reading)
-                # Auto mode safety check
-                if ctrl.get("auto_mode"):
-                    if turbidity > ctrl.get("threshold_turbidity", 50.0) and motor > 0:
-                        await db.control.update_one(
-                            {"user_id": u["id"]},
-                            {"$set": {"motor_speed": 0, "nozzle_on": False,
-                                       "updated_at": datetime.now(timezone.utc).isoformat()}},
+
+                # === AUTO NOTIFICATIONS (real-time, with cooldown) ===
+                ph_min = ctrl.get("threshold_ph_min", 6.0)
+                ph_max = ctrl.get("threshold_ph_max", 8.5)
+                tu_max = ctrl.get("threshold_turbidity", 50.0)
+
+                # 1. Auto-mode safety stop
+                if ctrl.get("auto_mode") and turbidity > tu_max and motor > 0:
+                    await db.control.update_one(
+                        {"user_id": u["id"]},
+                        {"$set": {"motor_speed": 0, "nozzle_on": False,
+                                   "updated_at": datetime.now(timezone.utc).isoformat()}},
+                    )
+                    await _notify_with_cooldown(
+                        u["id"], "auto_stop", "Auto Stop Aktif",
+                        f"Turbidity {turbidity:.1f} NTU melebihi {tu_max:.0f}. Mesin otomatis dihentikan.",
+                        icon="🚨", cooldown_sec=60,
+                    )
+                # 2. Turbidity warning (non-auto, just alert)
+                elif turbidity > tu_max and motor > 0:
+                    await _notify_with_cooldown(
+                        u["id"], "turbidity_high", "Air Keruh!",
+                        f"Turbidity {turbidity:.1f} NTU melebihi batas {tu_max:.0f}. Pertimbangkan ganti air.",
+                        icon="💧", cooldown_sec=180,
+                    )
+                # 3. pH out of range (only when machine running)
+                if motor > 0:
+                    if ph < ph_min:
+                        await _notify_with_cooldown(
+                            u["id"], "ph_low", "pH Air Terlalu Asam",
+                            f"pH {ph:.2f} di bawah batas {ph_min:.1f}. Cek kualitas air.",
+                            icon="⚠️", cooldown_sec=180,
                         )
-                        await _send_push_to_user(u["id"], "🚨 Auto Stop",
-                                                 f"Turbidity {turbidity:.1f} NTU melebihi threshold. Mesin dihentikan otomatis.")
+                    elif ph > ph_max:
+                        await _notify_with_cooldown(
+                            u["id"], "ph_high", "pH Air Terlalu Basa",
+                            f"pH {ph:.2f} di atas batas {ph_max:.1f}. Cek kualitas air.",
+                            icon="⚠️", cooldown_sec=180,
+                        )
         except Exception:
             logging.exception("Simulator error")
         await asyncio.sleep(3)
