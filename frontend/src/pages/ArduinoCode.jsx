@@ -13,12 +13,14 @@ const ARDUINO_CODE = `// =======================================================
 #include <ESP32Servo.h>
 
 // ---- WiFi ----
-const char* ssid     = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+// ⚠️ REPLACE THESE PLACEHOLDERS BEFORE FLASHING TO HARDWARE
+// ============================================================
+const char* ssid     = "YOUR_WIFI_SSID";          // ← ganti
+const char* password = "YOUR_WIFI_PASSWORD";       // ← ganti
 
 // ---- Backend ----
-const char* SERVER_URL = "https://YOUR_DOMAIN/api";
-const char* JWT_TOKEN  = "PASTE_YOUR_LOGIN_TOKEN_HERE";
+const char* SERVER_URL = "https://YOUR_DOMAIN/api";    // ← ganti dengan URL console Anda
+const char* JWT_TOKEN  = "PASTE_YOUR_LOGIN_TOKEN_HERE"; // ← copy dari localStorage 'agriflow_token' setelah login
 
 // ---- Pins ----
 #define PH_PIN        34   // analog

@@ -38,7 +38,9 @@ export default function Dashboard() {
         setLatest(l.data || null);
         setHistory(h.data || []);
         setControl(c.data || null);
-      } catch (e) { /* silent */ }
+      } catch (e) {
+        console.error("Dashboard polling failed:", e);
+      }
     };
     tick();
     const id = setInterval(tick, POLL_INTERVAL);
@@ -50,7 +52,7 @@ export default function Dashboard() {
     api.get("/sessions?limit=1").then((r) => {
       const s = r.data?.[0];
       if (s && s.status === "running") setActiveSession(s);
-    }).catch(() => {});
+    }).catch((e) => console.error("Failed to load active session:", e));
   }, []);
 
   const updateControl = async (patch) => {
@@ -200,7 +202,7 @@ export default function Dashboard() {
                     {analysis.recommendations?.length > 0 && (
                       <ul className="mt-2 space-y-1">
                         {analysis.recommendations.map((r, i) => (
-                          <li key={i} className="text-xs text-neutral-400 flex gap-1.5">
+                          <li key={`rec-${i}-${r.slice(0, 20)}`} className="text-xs text-neutral-400 flex gap-1.5">
                             <span className="text-cyan-500">›</span>{r}
                           </li>
                         ))}
