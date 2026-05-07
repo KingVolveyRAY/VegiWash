@@ -1,0 +1,95 @@
+{
+  "project_name": "AgriFlow WashOps Dashboard",
+  "theme": "dark",
+  "archetype": "Archetype 4 (Swiss & High-Contrast)",
+  "brand": {
+    "name": "AgriFlow",
+    "tone": "Industrial, precise, authoritative, highly technical"
+  },
+  "typography": {
+    "headings": "Chivo",
+    "body": "IBM Plex Sans",
+    "mono_data": "JetBrains Mono",
+    "rules": [
+      "Do NOT use Inter for headings.",
+      "Use tracking-tight for headings > 32px.",
+      "Use tracking-[0.2em] uppercase for overlines/labels (e.g., sensor names).",
+      "Metric values (e.g., pH 7.2) must use JetBrains Mono to look like a terminal/dashboard."
+    ]
+  },
+  "colors": {
+    "background": "#0A0A0A",
+    "surface": "#121212",
+    "surface_hover": "#1E1E1E",
+    "border": "#262626",
+    "primary": "#06B6D4",
+    "primary_hover": "#0891B2",
+    "text": {
+      "primary": "#F5F5F5",
+      "secondary": "#A3A3A3",
+      "muted": "#737373"
+    },
+    "status": {
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "danger": "#EF4444",
+      "info": "#3B82F6"
+    }
+  },
+  "layout": {
+    "strategy": "The Control Room Grid",
+    "grid_classes": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6",
+    "spacing": "Generous spacing between sections, tight spacing within cards",
+    "container_padding": "p-4 sm:p-6 lg:p-8"
+  },
+  "surfaces": {
+    "cards": "Flat background (#121212), 1px solid border (#262626), no shadow. Rounded max 8px.",
+    "header": "Solid background (#0A0A0A) with a hard bottom border (#262626). z-50."
+  },
+  "components_strategy": {
+    "html_tailwind": ["Grid Layouts", "Header", "Sidebar", "Widget Wrappers"],
+    "shadcn": ["Buttons", "Slider (Motor Speed)", "Switch (Nozzle/Auto Mode)", "Card", "Dialog", "Tabs", "Toast"],
+    "charts": "Recharts for Wash Session History (Area/Line chart) with hidden grid lines and mono tooltips.",
+    "testing": "All interactive elements MUST have data-testid attributes."
+  },
+  "pages": {
+    "auth_login": {
+      "layout": "Split screen: left side industrial background image with overlay, right side login form.",
+      "features": "JWT Auth login form"
+    },
+    "dashboard": {
+      "layout": "Control Room Grid. Responsive mobile-first.",
+      "sections": [
+        "Header: Logo, Profile Menu, PWA Push Notification Bell Toggle.",
+        "KPI Widgets: pH Level (Value + Gauge), Turbidity NTU, AI Cleanliness Score.",
+        "Live Camera Feed: Large widget showing the current vegetable washing view.",
+        "Manual Controls: DC Motor Speed (Slider), Water Nozzle (Switch), Push Servo (Button).",
+        "Mode Selector: Toggle between Manual and Automatic mode (with threshold settings popup).",
+        "History Chart: Wide widget for session history graphs."
+      ]
+    }
+  },
+  "icons": {
+    "library": "lucide-react"
+  },
+  "image_urls": [
+    {
+      "url": "https://images.unsplash.com/photo-1708793559923-b1d38cdfacf0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTF8MHwxfHNlYXJjaHwxfHx2ZWdldGFibGUlMjB3YXNoaW5nJTIwZmFjaWxpdHklMjBpbmR1c3RyaWFsfGVufDB8fHx8MTc3ODEyNTY2MHww&ixlib=rb-4.1.0&q=85",
+      "description": "Industrial vegetable washing machine - For Login Page background",
+      "category": "hero_background"
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1700515268322-c462b72cdf5a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHw0fHxncmVlbiUyMHZlZ2V0YWJsZXMlMjB3YXRlciUyMHdhc2h8ZW58MHx8fHwxNzc4MTI1NjYwfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Live camera feed view of vegetables being washed in water",
+      "category": "camera_feed"
+    }
+  ],
+  "instructions_to_main_agent": [
+    "Ensure complete responsive layout, mobile first (HP layout is crucial).",
+    "Use data-testid for all interactables.",
+    "Install and use 'recharts' for data visualization.",
+    "Implement local state mock logic for dashboard data, sensors, slider, toggle.",
+    "Add 'lucide-react' for icons.",
+    "Add fonts via Google Fonts import in index.html (Chivo, IBM Plex Sans, JetBrains Mono)."
+  ]
+}
