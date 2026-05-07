@@ -24,12 +24,40 @@ export default function Header() {
 
   const togglePush = async () => {
     try {
-      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-        toast.error("Browser tidak mendukung push notification");
+      // Pre-flight checks
+      if (!window.isSecureContext) {
+        toast.error("Push butuh HTTPS. Akses lewat URL https:// (bukan IP).");
         return;
       }
-      let reg = await navigator.serviceWorker.getRegistration();
-      if (!reg) reg = await navigator.serviceWorker.register("/service-worker.js");
+      if (!("serviceWorker" in navigator)) {
+        toast.error("Browser tidak support Service Worker. Coba Chrome/Firefox terbaru.");
+        return;
+      }
+      if (!("PushManager" in window)) {
+        toast.error("Browser tidak support Push API. Update browser atau coba Chrome.");
+        return;
+      }
+      if (!("Notification" in window)) {
+        toast.error("Browser tidak support Notification API.");
+        return;
+      }
+      // Check existing permission state
+      if (Notification.permission === "denied") {
+        toast.error("Izin notifikasi sudah ditolak. Buka Settings browser → izinkan notifikasi situs ini → reload.", { duration: 8000 });
+        return;
+      }
+
+      let reg;
+      try {
+        reg = await navigator.serviceWorker.getRegistration();
+        if (!reg) reg = await navigator.serviceWorker.register("/service-worker.js", { scope: "/" });
+        await navigator.serviceWorker.ready;
+      } catch (swErr) {
+        console.error("SW register failed:", swErr);
+        toast.error(`Service Worker gagal register: ${swErr.message || swErr}`, { duration: 8000 });
+        return;
+      }
+
       const existing = await reg.pushManager.getSubscription();
       if (existing) {
         await existing.unsubscribe();
@@ -37,13 +65,37 @@ export default function Header() {
         toast.success("Notifikasi dimatikan");
         return;
       }
+
       const perm = await Notification.requestPermission();
-      if (perm !== "granted") { toast.error("Izin notifikasi ditolak"); return; }
+      if (perm === "denied") {
+        toast.error("Izin ditolak. Aktifkan manual via Settings browser.", { duration: 8000 });
+        return;
+      }
+      if (perm !== "granted") {
+        toast.warning("Izin tidak diberikan");
+        return;
+      }
+
       const { data } = await api.get("/notifications/vapid-public");
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(data.public_key),
-      });
+      let sub;
+      try {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(data.public_key),
+        });
+      } catch (subErr) {
+        console.error("Subscribe failed:", subErr);
+        const msg = subErr.message || String(subErr);
+        if (msg.includes("permission")) {
+          toast.error("Izin push diblokir di level OS. Cek Settings Android → Apps → Browser → Notifications.", { duration: 10000 });
+        } else if (msg.includes("AbortError") || msg.includes("registration")) {
+          toast.error("Browser kamu mungkin tanpa Google Play Services (FCM). Coba Chrome dengan akun Google.", { duration: 10000 });
+        } else {
+          toast.error(`Subscribe gagal: ${msg}`, { duration: 8000 });
+        }
+        return;
+      }
+
       const subJson = sub.toJSON();
       await api.post("/notifications/subscribe", {
         endpoint: subJson.endpoint,
@@ -52,8 +104,8 @@ export default function Header() {
       setPushOn(true);
       toast.success("Notifikasi aktif!");
     } catch (e) {
-      console.error(e);
-      toast.error("Gagal mengaktifkan notifikasi");
+      console.error("Push toggle error:", e);
+      toast.error(`Gagal: ${e.message || e}`, { duration: 8000 });
     }
   };
 
