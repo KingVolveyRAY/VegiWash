@@ -304,6 +304,48 @@ async def list_sessions(limit: int = 50, user=Depends(get_current_user)):
     cursor = db.sessions.find({"user_id": user["id"]}, {"_id": 0}).sort("started_at", -1).limit(limit)
     return await cursor.to_list(length=limit)
 
+@api_router.get("/sessions/lcd-summary")
+async def lcd_summary(user=Depends(get_current_user)):
+    """
+    Returns a flat, display-friendly summary of the LATEST completed session.
+    Designed for resource-constrained devices (ESP32 + LCD).
+    Always returns short keys, fixed format strings - easy to render on 16x2/20x4 LCD.
+    """
+    session = await db.sessions.find_one(
+        {"user_id": user["id"], "status": "completed"},
+        {"_id": 0},
+        sort=[("ended_at", -1)],
+    )
+    if not session:
+        return {
+            "available": False,
+            "line1": "No session yet",
+            "line2": "Start washing!",
+            "line3": "",
+            "line4": "",
+        }
+    started = datetime.fromisoformat(session["started_at"]) if isinstance(session["started_at"], str) else session["started_at"]
+    ended = datetime.fromisoformat(session["ended_at"]) if isinstance(session["ended_at"], str) else session["ended_at"]
+    duration_s = int((ended - started).total_seconds()) if ended else 0
+    ph = session.get("avg_ph") or 0.0
+    tu = session.get("avg_turbidity") or 0.0
+    score = session.get("cleanliness_score")
+    score_str = f"{int(score)}" if score is not None else "--"
+
+    return {
+        "available": True,
+        "session_id": session["id"][:8],
+        "duration_s": duration_s,
+        "avg_ph": round(ph, 2),
+        "avg_turbidity": round(tu, 1),
+        "cleanliness_score": score,
+        # Pre-formatted strings for direct LCD display (≤20 chars/line, fits 20x4)
+        "line1": "AgriFlow - DONE",
+        "line2": f"pH:{ph:.2f} NTU:{tu:.1f}",
+        "line3": f"Clean:{score_str}% T:{duration_s}s",
+        "line4": f"ID:{session['id'][:8]}",
+    }
+
 # ============= AI Vision =============
 @api_router.post("/ai/analyze-vegetable", response_model=AnalyzeResult)
 async def analyze_vegetable(payload: AnalyzeImageRequest, user=Depends(get_current_user)):

@@ -140,6 +140,99 @@ void loop() {
   }
 }`;
 
+const LCD_DISPLAY_CODE = `// ============================================================
+//  AgriFlow LCD Display - ESP32 + LCD I2C 16x2 atau 20x4
+//  Menampilkan hasil pencucian terakhir dari API
+//  Wiring LCD I2C: SDA→GPIO21, SCL→GPIO22, VCC→5V, GND→GND
+// ============================================================
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// ---- Config ----
+const char* ssid       = "WIFI_NAME";
+const char* password   = "WIFI_PASS";
+const char* SERVER_URL = "https://YOUR_DOMAIN/api";
+const char* JWT_TOKEN  = "PASTE_TOKEN_HERE";
+
+// ---- LCD ----
+// Ganti 0x27 dengan alamat LCD Anda (umumnya 0x27 atau 0x3F)
+// 20x4 LCD: LiquidCrystal_I2C lcd(0x27, 20, 4);
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);  // SDA, SCL
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting WiFi...");
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("AgriFlow Ready");
+  lcd.setCursor(0, 1); lcd.print(WiFi.localIP());
+  delay(2000);
+}
+
+String lastSessionId = "";
+
+void fetchAndDisplay() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  http.begin(String(SERVER_URL) + "/sessions/lcd-summary");
+  http.addHeader("Authorization", String("Bearer ") + JWT_TOKEN);
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("HTTP error: %d\\n", code);
+    http.end();
+    return;
+  }
+
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, http.getString());
+  http.end();
+  if (err) { Serial.println("JSON parse error"); return; }
+
+  if (!doc["available"].as<bool>()) {
+    lcd.clear();
+    lcd.setCursor(0, 0); lcd.print(doc["line1"].as<const char*>());
+    lcd.setCursor(0, 1); lcd.print(doc["line2"].as<const char*>());
+    return;
+  }
+
+  // Only update LCD if NEW session (avoid flicker)
+  String sid = doc["session_id"].as<const char*>();
+  if (sid == lastSessionId) return;
+  lastSessionId = sid;
+
+  // Beep / blink to alert "selesai!"
+  for (int i = 0; i < 3; i++) {
+    lcd.noBacklight(); delay(200);
+    lcd.backlight();   delay(200);
+  }
+
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print(doc["line1"].as<const char*>()); // AgriFlow - DONE
+  lcd.setCursor(0, 1); lcd.print(doc["line2"].as<const char*>()); // pH:7.2 NTU:12.4
+  lcd.setCursor(0, 2); lcd.print(doc["line3"].as<const char*>()); // Clean:92% T:45s
+  lcd.setCursor(0, 3); lcd.print(doc["line4"].as<const char*>()); // ID:b2cf7adb
+
+  Serial.printf("New session displayed: %s\\n", sid.c_str());
+}
+
+unsigned long last = 0;
+void loop() {
+  if (millis() - last > 5000) {
+    last = millis();
+    fetchAndDisplay();
+  }
+}`;
+
 const PYTHON_SIMULATOR = `#!/usr/bin/env python3
 """Simulator alternatif (jika tidak punya ESP32 fisik)"""
 import requests, time, random
@@ -208,6 +301,25 @@ export default function ArduinoCode() {
           </div>
           <pre className="p-5 text-xs font-mono leading-relaxed overflow-x-auto text-neutral-300 max-h-[500px]">
 {ARDUINO_CODE}
+          </pre>
+        </div>
+
+        <div className="card-flat p-0 overflow-hidden" data-testid="lcd-code-block">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-[#262626] bg-[#0E0E0E]">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs text-cyan-400">lcd_display.ino</span>
+              <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-400 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">NEW</span>
+              <span className="text-[10px] text-neutral-500">· Tampilkan hasil sesi di LCD I2C 20x4</span>
+            </div>
+            <button
+              data-testid="copy-lcd-btn"
+              onClick={() => { navigator.clipboard.writeText(LCD_DISPLAY_CODE); }}
+              className="text-[11px] uppercase tracking-widest text-neutral-500 hover:text-cyan-400">
+              Copy
+            </button>
+          </div>
+          <pre className="p-5 text-xs font-mono leading-relaxed overflow-x-auto text-neutral-300 max-h-[500px]">
+{LCD_DISPLAY_CODE}
           </pre>
         </div>
 
