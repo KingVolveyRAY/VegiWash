@@ -12,7 +12,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "../components/ui/label";
 import { Input } from "../components/ui/input";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart, CartesianGrid } from "recharts";
-import { Droplet, Gauge, Power, Sparkles, ArrowDownToLine, Loader2, Activity, AlertTriangle, FlaskConical, Waves, Wand2 } from "lucide-react";
+import { Droplet, Gauge, Power, Sparkles, ArrowDownToLine, Loader2, Activity, AlertTriangle, FlaskConical, Waves, Wand2, Sun, Wind, MoveRight } from "lucide-react";
+import PipelineStages from "../components/PipelineStages";
 import { toast } from "sonner";
 
 const POLL_INTERVAL = 2000;
@@ -77,7 +78,7 @@ export default function Dashboard() {
     try {
       const r = await api.post(`/sessions/${activeSession.id}/stop`);
       setActiveSession(null);
-      await updateControl({ motor_speed: 0, nozzle_on: false });
+      await api.post("/pipeline/reset");
       toast.success("Sesi selesai. Skor pH avg: " + (r.data?.avg_ph?.toFixed(2) ?? "—"));
     } catch (e) { toast.error("Gagal menghentikan sesi"); }
   };
@@ -86,6 +87,21 @@ export default function Dashboard() {
     await updateControl({ servo_push: true });
     setTimeout(() => updateControl({ servo_push: false }), 1500);
     toast.info("Servo mendorong hasil cucian…");
+  };
+
+  const advancePipeline = async () => {
+    try {
+      const r = await api.post("/pipeline/advance");
+      const stage = r.data?.stage;
+      const labels = { sterilizing: "Tahap Sterilisasi (UV + Konveyor)", drying: "Tahap Pengeringan (Blower)", done: "Pipeline Selesai" };
+      toast.success(labels[stage] || stage);
+    } catch (e) { toast.error(e.response?.data?.detail || "Gagal advance pipeline"); }
+  };
+
+  const resetPipeline = async () => {
+    await api.post("/pipeline/reset");
+    setActiveSession(null);
+    toast.info("Pipeline direset");
   };
 
   const onSnapshot = async (file) => {
@@ -130,10 +146,12 @@ export default function Dashboard() {
         { label: "TURBIDITY", value: `${tu.toFixed(1)} NTU`, color: "#F59E0B" },
         { label: "MOTOR", value: `${control?.motor_speed ?? 0}%`, color: "#10B981" },
         { label: "NOZZLE", value: control?.nozzle_on ? "ON" : "OFF", color: control?.nozzle_on ? "#10B981" : "#525252" },
+        { label: "CONVEYOR", value: control?.conveyor_on ? `${control?.conveyor_speed ?? 0}%` : "OFF", color: control?.conveyor_on ? "#A855F7" : "#525252" },
+        { label: "UV-C", value: control?.uv_light_on ? "ACTIVE" : "OFF", color: control?.uv_light_on ? "#A855F7" : "#525252" },
+        { label: "BLOWER", value: control?.blower_on ? `${control?.blower_speed ?? 0}%` : "OFF", color: control?.blower_on ? "#10B981" : "#525252" },
+        { label: "STAGE", value: (control?.stage || "idle").toUpperCase(), color: "#22D3EE" },
         { label: "MODE", value: control?.auto_mode ? "AUTO" : "MANUAL", color: control?.auto_mode ? "#06B6D4" : "#737373" },
-        { label: "SESSION", value: activeSession ? "RUNNING" : "IDLE", color: activeSession ? "#10B981" : "#525252" },
         { label: "ESP32", value: "CONNECTED", color: "#10B981" },
-        { label: "SYS", value: new Date().toLocaleTimeString("id-ID"), color: "#06B6D4" },
       ]} />
       <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Hero status bar */}
@@ -178,6 +196,15 @@ export default function Dashboard() {
               )}
             </div>
           </div>
+        </div>
+
+        {/* Pipeline Stages Visualizer */}
+        <div className="float-up">
+          <PipelineStages
+            stage={control?.stage || "idle"}
+            onAdvance={advancePipeline}
+            onReset={resetPipeline}
+          />
         </div>
 
         {/* KPI gauges */}
@@ -338,6 +365,87 @@ export default function Dashboard() {
               <ArrowDownToLine size={15} className="mr-2 text-cyan-400 group-hover:translate-y-0.5 transition-transform" />
               DORONG HASIL CUCIAN (SERVO)
             </Button>
+
+            {/* === STAGE 2: Sterilization === */}
+            <div className="pt-2 border-t border-[#1E1E20]">
+              <div className="overline mb-3 text-[10px]">Stage 2 · Sterilisasi</div>
+
+              {/* Conveyor */}
+              <div className="p-4 rounded-lg bg-[#0A0A0B] border border-[#1A1A1C] mb-3">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-6 h-6 rounded-md flex items-center justify-center ${control?.conveyor_on ? "bg-purple-500/20" : "bg-[#1A1A1C]"}`}>
+                      <MoveRight size={12} className={control?.conveyor_on ? "text-purple-400" : "text-neutral-600"} />
+                    </div>
+                    <span className="text-sm font-medium text-neutral-200">Konveyor</span>
+                  </div>
+                  <Switch checked={control?.conveyor_on || false}
+                    onCheckedChange={(v) => updateControl({ conveyor_on: v, conveyor_speed: v ? 60 : 0 })}
+                    data-testid="conveyor-switch" />
+                </div>
+                {control?.conveyor_on && (
+                  <>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] uppercase tracking-widest text-neutral-500">Kecepatan</span>
+                      <span className="font-mono tabular text-purple-400 text-sm">{control?.conveyor_speed ?? 0}%</span>
+                    </div>
+                    <Slider value={[control?.conveyor_speed ?? 60]} max={100} step={5}
+                      onValueChange={(v) => updateControl({ conveyor_speed: v[0] })}
+                      data-testid="conveyor-slider" />
+                  </>
+                )}
+              </div>
+
+              {/* UV Light */}
+              <div className={`flex items-center justify-between p-4 rounded-lg border transition-all ${
+                control?.uv_light_on ? "bg-purple-500/10 border-purple-500/40" : "bg-[#0A0A0B] border-[#1A1A1C]"
+              }`} style={control?.uv_light_on ? { boxShadow: "0 0 20px rgba(168, 85, 247, 0.2)" } : {}}>
+                <div className="flex items-center gap-2">
+                  <div className={`w-6 h-6 rounded-md flex items-center justify-center ${control?.uv_light_on ? "bg-purple-500/30" : "bg-[#1A1A1C]"}`}>
+                    <Sun size={12} className={control?.uv_light_on ? "text-purple-300" : "text-neutral-600"}
+                      style={control?.uv_light_on ? { filter: "drop-shadow(0 0 4px #A855F7)" } : {}} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-neutral-200">Sinar UV-C</div>
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                      {control?.uv_light_on ? "⚠ sterilizing" : "off"}
+                    </div>
+                  </div>
+                </div>
+                <Switch checked={control?.uv_light_on || false}
+                  onCheckedChange={(v) => updateControl({ uv_light_on: v })}
+                  data-testid="uv-switch" />
+              </div>
+            </div>
+
+            {/* === STAGE 3: Drying === */}
+            <div className="pt-2 border-t border-[#1E1E20]">
+              <div className="overline mb-3 text-[10px]">Stage 3 · Pengeringan</div>
+              <div className="p-4 rounded-lg bg-[#0A0A0B] border border-[#1A1A1C]">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-6 h-6 rounded-md flex items-center justify-center ${control?.blower_on ? "bg-emerald-500/20 rotate-slow" : "bg-[#1A1A1C]"}`}>
+                      <Wind size={12} className={control?.blower_on ? "text-emerald-400" : "text-neutral-600"} />
+                    </div>
+                    <span className="text-sm font-medium text-neutral-200">Blower</span>
+                  </div>
+                  <Switch checked={control?.blower_on || false}
+                    onCheckedChange={(v) => updateControl({ blower_on: v, blower_speed: v ? 80 : 0 })}
+                    data-testid="blower-switch" />
+                </div>
+                {control?.blower_on && (
+                  <>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] uppercase tracking-widest text-neutral-500">Kecepatan Angin</span>
+                      <span className="font-mono tabular text-emerald-400 text-sm">{control?.blower_speed ?? 0}%</span>
+                    </div>
+                    <Slider value={[control?.blower_speed ?? 80]} max={100} step={5}
+                      onValueChange={(v) => updateControl({ blower_speed: v[0] })}
+                      data-testid="blower-slider" />
+                  </>
+                )}
+              </div>
+            </div>
 
             {/* Threshold settings */}
             <Dialog open={thrOpen} onOpenChange={setThrOpen}>

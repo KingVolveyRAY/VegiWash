@@ -3,43 +3,64 @@ import Header from "../components/Header";
 import { Cpu, Zap, Wifi } from "lucide-react";
 
 const ARDUINO_CODE = `// ============================================================
-//  AgriFlow WashOps - ESP32 Firmware Example
-//  Sensors: pH (analog), Turbidity (analog), ESP32-CAM (HTTP)
-//  Actuators: DC Motor (PWM via L298N), Solenoid Nozzle, Servo
+//  AgriFlow WashOps - ESP32 Firmware (FULL PIPELINE)
+//  Stage 1: Washing  - DC Motor + Nozzle + Servo + pH/Turbidity
+//  Stage 2: Steril   - Conveyor (PWM) + UV-C Light (relay)
+//  Stage 3: Drying   - Blower (PWM)
 // ============================================================
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <ESP32Servo.h>
 
-// ---- WiFi ----
+// ---- WiFi & Backend ----
 // ⚠️ REPLACE THESE PLACEHOLDERS BEFORE FLASHING TO HARDWARE
-// ============================================================
-const char* ssid     = "YOUR_WIFI_SSID";          // ← ganti
-const char* password = "YOUR_WIFI_PASSWORD";       // ← ganti
-
-// ---- Backend ----
-const char* SERVER_URL = "https://YOUR_DOMAIN/api";    // ← ganti dengan URL console Anda
-const char* JWT_TOKEN  = "PASTE_YOUR_LOGIN_TOKEN_HERE"; // ← copy dari localStorage 'agriflow_token' setelah login
+const char* ssid     = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+const char* SERVER_URL = "https://YOUR_DOMAIN/api";
+const char* JWT_TOKEN  = "PASTE_YOUR_LOGIN_TOKEN_HERE";
 
 // ---- Pins ----
-#define PH_PIN        34   // analog
-#define TURBIDITY_PIN 35   // analog
-#define MOTOR_EN      25   // PWM out to L298N ENA
+// Stage 1: Washing
+#define PH_PIN        34   // analog input
+#define TURBIDITY_PIN 35   // analog input
+#define MOTOR_EN      25   // PWM → L298N #1 ENA (DC motor pencuci)
 #define MOTOR_IN1     26
 #define MOTOR_IN2     27
-#define NOZZLE_PIN    14   // solenoid relay
-#define SERVO_PIN     13
+#define NOZZLE_PIN    14   // relay → solenoid valve 12V
+#define SERVO_PIN     13   // servo SG90
+
+// Stage 2: Sterilization
+#define CONVEYOR_EN   33   // PWM → L298N #2 ENA (DC motor konveyor)
+#define CONVEYOR_IN1  32
+#define CONVEYOR_IN2  4
+#define UV_PIN        16   // relay → lampu UV-C 220V (HATI-HATI!)
+
+// Stage 3: Drying
+#define BLOWER_EN     17   // PWM → MOSFET / driver blower
+
+// PWM channels (ESP32 ledc)
+#define MOTOR_CH      0
+#define CONVEYOR_CH   1
+#define BLOWER_CH     2
 
 Servo pushServo;
 
 void setup() {
   Serial.begin(115200);
+
   pinMode(MOTOR_IN1, OUTPUT);
   pinMode(MOTOR_IN2, OUTPUT);
   pinMode(NOZZLE_PIN, OUTPUT);
-  ledcSetup(0, 5000, 8);
-  ledcAttachPin(MOTOR_EN, 0);
+  pinMode(CONVEYOR_IN1, OUTPUT);
+  pinMode(CONVEYOR_IN2, OUTPUT);
+  pinMode(UV_PIN, OUTPUT);
+
+  // Setup PWM channels
+  ledcSetup(MOTOR_CH, 5000, 8);     ledcAttachPin(MOTOR_EN, MOTOR_CH);
+  ledcSetup(CONVEYOR_CH, 5000, 8);  ledcAttachPin(CONVEYOR_EN, CONVEYOR_CH);
+  ledcSetup(BLOWER_CH, 25000, 8);   ledcAttachPin(BLOWER_EN, BLOWER_CH);
+
   pushServo.attach(SERVO_PIN);
   pushServo.write(0);
 
@@ -49,41 +70,41 @@ void setup() {
   Serial.println("\\nConnected: " + WiFi.localIP().toString());
 }
 
+// ============== Sensor Readers ==============
 float readPH() {
-  // Calibration depends on probe. Example linear map.
-  int raw = analogRead(PH_PIN);             // 0..4095
+  int raw = analogRead(PH_PIN);
   float v = raw * (3.3 / 4095.0);
-  float ph = 7.0 + ((2.5 - v) / 0.18);       // adjust slope per sensor
-  return ph;
+  return 7.0 + ((2.5 - v) / 0.18);  // calibrate per probe
 }
 
 float readTurbidity() {
-  // SEN0189 turbidity sensor (NTU approximation)
   int raw = analogRead(TURBIDITY_PIN);
   float v = raw * (3.3 / 4095.0);
   float ntu = -1120.4 * v * v + 5742.3 * v - 4352.9;
-  if (ntu < 0) ntu = 0;
-  return ntu;
+  return ntu < 0 ? 0 : ntu;
 }
 
-void setMotor(int speedPct) {
+// ============== Actuator Drivers ==============
+void setDCMotor(int ch, int in1, int in2, int speedPct) {
   if (speedPct <= 0) {
-    digitalWrite(MOTOR_IN1, LOW);
-    digitalWrite(MOTOR_IN2, LOW);
-    ledcWrite(0, 0);
+    digitalWrite(in1, LOW);
+    digitalWrite(in2, LOW);
+    ledcWrite(ch, 0);
   } else {
-    digitalWrite(MOTOR_IN1, HIGH);
-    digitalWrite(MOTOR_IN2, LOW);
-    ledcWrite(0, map(speedPct, 0, 100, 0, 255));
+    digitalWrite(in1, HIGH);
+    digitalWrite(in2, LOW);
+    ledcWrite(ch, map(speedPct, 0, 100, 0, 255));
   }
 }
 
-void setNozzle(bool on) { digitalWrite(NOZZLE_PIN, on ? HIGH : LOW); }
-void pushVeg() {
-  pushServo.write(120); delay(800);
-  pushServo.write(0);
-}
+void setMotor(int speedPct)    { setDCMotor(MOTOR_CH, MOTOR_IN1, MOTOR_IN2, speedPct); }
+void setConveyor(int speedPct) { setDCMotor(CONVEYOR_CH, CONVEYOR_IN1, CONVEYOR_IN2, speedPct); }
+void setBlower(int speedPct)   { ledcWrite(BLOWER_CH, map(constrain(speedPct, 0, 100), 0, 100, 0, 255)); }
+void setNozzle(bool on)        { digitalWrite(NOZZLE_PIN, on ? HIGH : LOW); }
+void setUV(bool on)            { digitalWrite(UV_PIN, on ? HIGH : LOW); }
+void pushVeg() { pushServo.write(120); delay(800); pushServo.write(0); }
 
+// ============== Backend Communication ==============
 void postSensors(float ph, float ntu, int motor, bool nozzle, int servoPos) {
   if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient http;
@@ -100,43 +121,85 @@ void postSensors(float ph, float ntu, int motor, bool nozzle, int servoPos) {
   String body; serializeJson(doc, body);
 
   int code = http.POST(body);
-  Serial.printf("POST /sensors/ingest -> %d\\n", code);
+  Serial.printf("POST /sensors -> %d\\n", code);
   http.end();
 }
 
-void fetchControl(int &motor, bool &nozzle, bool &servoPush) {
+struct ControlState {
+  int motor_speed;
+  bool nozzle_on;
+  bool servo_push;
+  int conveyor_speed;
+  bool conveyor_on;
+  bool uv_light_on;
+  int blower_speed;
+  bool blower_on;
+  String stage;
+};
+
+bool fetchControl(ControlState &s) {
   HTTPClient http;
   http.begin(String(SERVER_URL) + "/control");
   http.addHeader("Authorization", String("Bearer ") + JWT_TOKEN);
   int code = http.GET();
+  bool ok = false;
   if (code == 200) {
-    StaticJsonDocument<512> doc;
-    deserializeJson(doc, http.getString());
-    motor = doc["motor_speed"] | 0;
-    nozzle = doc["nozzle_on"] | false;
-    servoPush = doc["servo_push"] | false;
+    StaticJsonDocument<768> doc;
+    if (deserializeJson(doc, http.getString()) == DeserializationError::Ok) {
+      s.motor_speed     = doc["motor_speed"]    | 0;
+      s.nozzle_on       = doc["nozzle_on"]      | false;
+      s.servo_push      = doc["servo_push"]     | false;
+      s.conveyor_speed  = doc["conveyor_speed"] | 0;
+      s.conveyor_on     = doc["conveyor_on"]    | false;
+      s.uv_light_on     = doc["uv_light_on"]    | false;
+      s.blower_speed    = doc["blower_speed"]   | 0;
+      s.blower_on       = doc["blower_on"]      | false;
+      s.stage           = String((const char*)(doc["stage"] | "idle"));
+      ok = true;
+    }
   }
   http.end();
+  return ok;
 }
 
+// ============== Main Loop ==============
 unsigned long lastTick = 0;
+bool lastServoPush = false;
+
 void loop() {
   unsigned long now = millis();
   if (now - lastTick > 3000) {
     lastTick = now;
 
-    int motor = 0; bool nozzle = false; bool servoPush = false;
-    fetchControl(motor, nozzle, servoPush);
-    setMotor(motor);
-    setNozzle(nozzle);
-    if (servoPush) pushVeg();
+    ControlState s = {0, false, false, 0, false, false, 0, false, "idle"};
+    if (!fetchControl(s)) {
+      Serial.println("Fetch control FAILED");
+      return;
+    }
 
+    // Stage 1: Washing
+    setMotor(s.motor_speed);
+    setNozzle(s.nozzle_on);
+    if (s.servo_push && !lastServoPush) pushVeg();
+    lastServoPush = s.servo_push;
+
+    // Stage 2: Sterilization
+    setConveyor(s.conveyor_on ? s.conveyor_speed : 0);
+    setUV(s.uv_light_on);
+
+    // Stage 3: Drying
+    setBlower(s.blower_on ? s.blower_speed : 0);
+
+    // Telemetry
     float ph = readPH();
     float ntu = readTurbidity();
-    postSensors(ph, ntu, motor, nozzle, servoPush ? 120 : 0);
+    postSensors(ph, ntu, s.motor_speed, s.nozzle_on, s.servo_push ? 120 : 0);
 
-    Serial.printf("pH=%.2f NTU=%.1f motor=%d%% nozzle=%d\\n",
-                  ph, ntu, motor, nozzle);
+    Serial.printf("[%s] pH=%.2f NTU=%.1f | M:%d N:%d | C:%d UV:%d | B:%d\\n",
+      s.stage.c_str(), ph, ntu,
+      s.motor_speed, s.nozzle_on,
+      s.conveyor_on ? s.conveyor_speed : 0, s.uv_light_on,
+      s.blower_on ? s.blower_speed : 0);
   }
 }`;
 

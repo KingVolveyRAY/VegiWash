@@ -84,8 +84,16 @@ class ControlState(BaseModel):
     motor_speed: int = 0
     nozzle_on: bool = False
     servo_push: bool = False
+    # Stage 2: Sterilization & Drying
+    conveyor_on: bool = False
+    conveyor_speed: int = 0       # 0-100% PWM
+    uv_light_on: bool = False
+    blower_on: bool = False
+    blower_speed: int = 0          # 0-100% PWM
+    # Pipeline stage indicator: idle | washing | sterilizing | drying | done
+    stage: str = "idle"
     auto_mode: bool = False
-    threshold_turbidity: float = 50.0  # auto stop if turbidity > this
+    threshold_turbidity: float = 50.0
     threshold_ph_min: float = 6.0
     threshold_ph_max: float = 8.5
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -94,6 +102,12 @@ class ControlUpdate(BaseModel):
     motor_speed: Optional[int] = None
     nozzle_on: Optional[bool] = None
     servo_push: Optional[bool] = None
+    conveyor_on: Optional[bool] = None
+    conveyor_speed: Optional[int] = None
+    uv_light_on: Optional[bool] = None
+    blower_on: Optional[bool] = None
+    blower_speed: Optional[int] = None
+    stage: Optional[str] = None
     auto_mode: Optional[bool] = None
     threshold_turbidity: Optional[float] = None
     threshold_ph_min: Optional[float] = None
@@ -261,10 +275,86 @@ async def update_control(payload: ControlUpdate, user=Depends(get_current_user))
 async def start_session(user=Depends(get_current_user)):
     session = WashSession(user_id=user["id"])
     await db.sessions.insert_one(session.model_dump(mode="json"))
+    # Set stage to washing
+    await db.control.update_one({"user_id": user["id"]},
+        {"$set": {"stage": "washing", "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
     await _send_push_to_user(user["id"], "Sesi Dimulai",
                               "Pencucian sayuran dimulai. Monitor pH & turbidity di dashboard.",
                               icon="▶️")
     return session.model_dump(mode="json")
+
+@api_router.post("/pipeline/advance")
+async def advance_pipeline(user=Depends(get_current_user)):
+    """
+    Advance pipeline to next stage:
+    washing → sterilizing (servo push + conveyor + UV) → drying (blower) → done
+    """
+    ctrl = await db.control.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
+    current = ctrl.get("stage", "idle")
+
+    if current in ("idle", "done"):
+        raise HTTPException(status_code=400, detail="Mulai sesi pencucian dulu")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if current == "washing":
+        # Transition to sterilizing: stop wash, push servo, start conveyor + UV
+        update = {
+            "motor_speed": 0, "nozzle_on": False,
+            "servo_push": True,
+            "conveyor_on": True, "conveyor_speed": 60,
+            "uv_light_on": True,
+            "stage": "sterilizing",
+            "updated_at": now_iso,
+        }
+        await db.control.update_one({"user_id": user["id"]}, {"$set": update})
+        # Auto-release servo after 2s (in real ESP32 this would be local)
+        await _send_push_to_user(user["id"], "Tahap Sterilisasi",
+                                  "Sayuran dipindah ke konveyor. Sinar UV aktif.",
+                                  icon="☢️")
+    elif current == "sterilizing":
+        # Transition to drying: stop UV, conveyor on slower, blower on
+        update = {
+            "uv_light_on": False,
+            "conveyor_on": True, "conveyor_speed": 40,
+            "blower_on": True, "blower_speed": 80,
+            "servo_push": False,
+            "stage": "drying",
+            "updated_at": now_iso,
+        }
+        await db.control.update_one({"user_id": user["id"]}, {"$set": update})
+        await _send_push_to_user(user["id"], "Tahap Pengeringan",
+                                  "Sinar UV mati. Blower dinyalakan untuk mengeringkan sayuran.",
+                                  icon="💨")
+    elif current == "drying":
+        # Final: stop everything
+        update = {
+            "conveyor_on": False, "conveyor_speed": 0,
+            "blower_on": False, "blower_speed": 0,
+            "uv_light_on": False, "servo_push": False,
+            "stage": "done",
+            "updated_at": now_iso,
+        }
+        await db.control.update_one({"user_id": user["id"]}, {"$set": update})
+        await _send_push_to_user(user["id"], "Pipeline Selesai",
+                                  "Sayuran siap dikemas. Semua mesin dimatikan.",
+                                  icon="✅")
+    doc = await db.control.find_one({"user_id": user["id"]}, {"_id": 0})
+    return doc
+
+@api_router.post("/pipeline/reset")
+async def reset_pipeline(user=Depends(get_current_user)):
+    """Stop all actuators and reset stage to idle."""
+    update = {
+        "motor_speed": 0, "nozzle_on": False, "servo_push": False,
+        "conveyor_on": False, "conveyor_speed": 0,
+        "uv_light_on": False,
+        "blower_on": False, "blower_speed": 0,
+        "stage": "idle",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.control.update_one({"user_id": user["id"]}, {"$set": update})
+    return {"ok": True}
 
 @api_router.post("/sessions/{session_id}/stop")
 async def stop_session(session_id: str, user=Depends(get_current_user)):
