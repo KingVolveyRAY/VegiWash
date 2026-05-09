@@ -19,7 +19,7 @@ export default function LiveWaveform({ active = false, bars = 24, color = "#06B6
     <div className="flex items-end gap-[3px] h-10">
       {heights.map((h, i) => (
         <div
-          key={i}
+          key={`bar-${i}`}
           className="w-[3px] rounded-sm"
           style={{
             height: `${h * 100}%`,
