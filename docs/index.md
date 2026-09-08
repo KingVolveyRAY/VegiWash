@@ -1,0 +1,3 @@
+# VegiWash
+
+Project documentation homepage.
